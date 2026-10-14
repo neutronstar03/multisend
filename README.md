@@ -17,10 +17,10 @@ The frontend uses an injected EIP-6963 wallet (Rabby or MetaMask). AirGap QR sig
 ## Workflow
 
 1. Connect the sending wallet on Ethereum mainnet.
-2. Configure the deployed contract address. The frontend requires its runtime bytecode hash to match this build.
+2. The Ethereum contract defaults to `0x6dd1CFbea062D4a6843BbbEA16912b76d585BA94`. A custom address can be saved locally; the frontend requires its runtime bytecode hash to match this build.
 3. Optionally configure an Alchemy or Etherscan API key for indexed discovery. Without an indexer, the known-token catalogue and manually entered token addresses are used; completeness is explicitly not claimed.
 4. Select tokens and edit amounts. All positive balances remain visible, including dust, unpriced assets and vault shares. Prices are not required or inferred.
-5. Approve each token once. Unlimited approval is the default requested for repeated use; exact approval is available. Tokens requiring zero-first approval have a separate reset action.
+5. Approve each token once. After the wallet submits an approval, you can approve the next token while earlier transactions confirm. Each token follows its own transaction receipt; simulation waits for confirmations. Unlimited approval is the default requested for repeated use; exact approval is available. Tokens requiring zero-first approval have a separate reset action.
 6. Simulate the exact batch after approvals confirm, review the recipient and amounts, then sign the final send in the wallet.
 
 API keys, RPC URL, contract, manual addresses and recipient are stored only in this browser. They are sent to their respective API providers when used. Wallet connection and selected amounts are not persisted. The public build contains no personal address or API key.
