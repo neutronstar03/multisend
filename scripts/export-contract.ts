@@ -1,0 +1,10 @@
+import { keccak256, type Hex } from 'viem';
+const input: unknown = await Bun.file('out/MultiSend.sol/MultiSend.json').json();
+if (!input || typeof input !== 'object' || !('abi' in input) || !('bytecode' in input) || !('deployedBytecode' in input)) throw new Error('Invalid Foundry artifact');
+const artifact = input as {abi:unknown[];bytecode:{object:Hex};deployedBytecode:{object:Hex};metadata:string|{compiler:{version:string}}};
+const metadata = typeof artifact.metadata==='string' ? JSON.parse(artifact.metadata) : artifact.metadata;
+const source=await Bun.file('contracts/MultiSend.sol').text();
+const limit=source.match(/uint256 public constant MAX_TOKENS\s*=\s*(\d+)\s*;/);
+if(!limit)throw new Error('Could not read the contract batch-size constant.');
+await Bun.write('src/contract.json',JSON.stringify({abi:artifact.abi,bytecode:artifact.bytecode.object,deployedBytecode:artifact.deployedBytecode.object,compiler:metadata.compiler.version,runtimeHash:keccak256(artifact.deployedBytecode.object),maxTokens:Number(limit[1])},null,2)+'\n');
+console.log('Exported ABI, creation bytecode and runtime hash.');

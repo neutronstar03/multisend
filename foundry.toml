@@ -1,0 +1,33 @@
+[profile.default]
+src = "contracts"
+test = "test"
+out = "out"
+libs = []
+solc = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1000000
+bytecode_hash = "none"
+cbor_metadata = false
+
+# Lints intentionally excluded for this contract:
+# - require-revert-in-loop: failing fast on the first bad entry is the design; the
+#   whole batch reverts, so there is no partial state to worry about.
+# - calls-loop: a batch sender calls transferFrom once per token by definition.
+# - reentrancy-no-eth: false positive. The nonReentrant modifier sets the lock before
+#   the function body runs, which test_ReentrancyIsBlocked proves.
+# - reentrancy-events: the emitted log is informational and any revert discards it.
+[lint]
+exclude_lints = [
+    "require-revert-in-loop",
+    "calls-loop",
+    "reentrancy-no-eth",
+    "reentrancy-events",
+]
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = true
+int_types = "long"
+quote_style = "double"

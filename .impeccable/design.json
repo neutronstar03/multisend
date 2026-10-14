@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-14T01:51:31.382Z",
+  "title": "Design System: Multisend",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Pale green action"
+      },
+      "page": {
+        "role": "neutral",
+        "displayName": "Slate page"
+      },
+      "warning": {
+        "role": "secondary",
+        "displayName": "Approval amber"
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "activityPulse",
+        "value": "1.5s ease-in-out infinite",
+        "purpose": "Activity indicator; disabled with prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stackWorkspace",
+        "value": "1000px"
+      },
+      {
+        "name": "mobile",
+        "value": "600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Simulation and final send.",
+      "html": "<button class=\"ds-primary\">Simulate batch</button>",
+      "css": ".ds-primary{font:600 14px 'Segoe UI',sans-serif;background:#aedcbc;color:#17271f;border:1px solid #aedcbc;border-radius:5px;padding:9px 13px}.ds-primary:hover{background:#c0e7cc}.ds-primary:focus-visible{outline:2px solid #aedcbc;outline-offset:3px}"
+    },
+    {
+      "name": "Secondary action",
+      "kind": "button",
+      "description": "Inventory and settings actions.",
+      "html": "<button class=\"ds-secondary\">Refresh balances</button>",
+      "css": ".ds-secondary{font:14px 'Segoe UI',sans-serif;background:#273644;color:#edf1f5;border:1px solid #556778;border-radius:5px;padding:9px 13px}.ds-secondary:hover{background:#35495b}.ds-secondary:focus-visible{outline:2px solid #aedcbc;outline-offset:3px}"
+    },
+    {
+      "name": "Address field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Recipient or contract address.",
+      "html": "<input class=\"ds-input\" placeholder=\"0x... recipient address\" />",
+      "css": ".ds-input{font:14px 'Segoe UI',sans-serif;background:#141e29;color:#edf1f5;border:1px solid #526477;border-radius:4px;padding:10px;caret-color:#aedcbc}.ds-input::placeholder{color:#a4b3c3}.ds-input:focus-visible{outline:2px solid #aedcbc;outline-offset:3px}"
+    },
+    {
+      "name": "Review rail",
+      "kind": "card",
+      "description": "Single batch review surface.",
+      "html": "<aside class=\"ds-review\"><h2>Review batch</h2><p>Service fee: 0 ETH</p></aside>",
+      "css": ".ds-review{font:14px 'Segoe UI',sans-serif;background:#1b242e;color:#edf1f5;border-radius:7px;padding:22px}.ds-review h2{font-size:18px;font-weight:600;margin:0 0 22px}"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "description": "Product identity and Ethereum network.",
+      "html": "<header class=\"ds-header\"><strong>Multisend</strong><span>Ethereum</span></header>",
+      "css": ".ds-header{font:14px 'Segoe UI',sans-serif;background:#202f3e;color:#edf1f5;padding:18px 32px;display:flex;gap:16px;align-items:center;border-bottom:1px solid #42576c}.ds-header strong{font-size:23px}.ds-header span{font-size:12px;color:#c0cfdd}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Recurring token transfer workbench",
+    "overview": "User-pinned compact dark operational screen. Inventory and batch review lead; advanced discovery settings recede.",
+    "keyCharacteristics": [
+      "Precise token balances",
+      "Dark slate shell",
+      "Single review rail",
+      "Reusable token set"
+    ],
+    "rules": [
+      {
+        "name": "State in text",
+        "body": "Readiness and errors must have text labels as well as colors.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Keep dust selectable",
+      "Reserve right-side space for select chevrons",
+      "Respect reduced motion"
+    ],
+    "donts": [
+      "Do not introduce service fees",
+      "Do not add web deployment",
+      "Do not infer price from raw balances"
+    ]
+  }
+}
