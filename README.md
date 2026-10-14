@@ -77,6 +77,14 @@ Preparation and the PowerShell command above only simulate and estimate. Once re
 ./scripts/deploy.ps1 -Account multisend-deployer -Broadcast
 ```
 
+Optional EIP-1559 fee overrides apply to both estimation and broadcast. For example (illustrative values, not a current fee recommendation):
+
+```powershell
+./scripts/deploy.ps1 -Account multisend-deployer -MaxFeeGwei 2 -PriorityFeeGwei 0.1
+```
+
+Add `-Broadcast` to submit with those same overrides. `MaxFeeGwei` caps the total price per gas, including the priority fee; it is not the gas limit. The actual charge is gas used times the effective gas price. Omit these options to let Foundry estimate fees.
+
 For another compatible chain, supply `-RpcUrl` and `-ChainId` explicitly. Do not recompile with different settings between chains. The script checks chain ID, factory code, address occupancy, gas estimate and deployed runtime. Its `deployment-plan.json` is ignored by Git. No private key is passed in command arguments.
 
 After obtaining the contract address, set the API key in the local environment and run:
