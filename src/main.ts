@@ -37,8 +37,8 @@ let wallet: Wallet|null=null, owner:Address|null=null, tokens:Token[]=[], busy=f
 let selected=new Map<string,string>(), lastHash:Hex|null=null, scanId=0, reviewed:string|null=null, gasEstimate:bigint|null=null, feeEstimate:bigint|null=null, contractVerified=false;
 status=session.state.message;
 let discoveryIssues:string[]=[];
-const pendingApprovals=new PendingApprovals();
-const approvalKey=(account:Address,contract:Address,token:string)=>`${account.toLowerCase()}:${contract.toLowerCase()}:${token.toLowerCase()}`;
+const pendingApprovals=new PendingApprovals(localStorage);
+const approvalKey=(account:Address,contract:Address,token:string)=>`1:${account.toLowerCase()}:${contract.toLowerCase()}:${token.toLowerCase()}`;
 function pendingApproval(token:string){return owner&&isAddress(settings.contract)?pendingApprovals.transactions.get(approvalKey(owner,getAddress(settings.contract),token)):undefined;}
 function activeApprovalCount(){return owner&&isAddress(settings.contract)?pendingApprovals.count(approvalKey(owner,getAddress(settings.contract),'')):0;}
 const batchAbi=artifact.abi as Abi;
@@ -111,7 +111,7 @@ async function load(){
   selected=new Map([...selected].filter(([a])=>tokens.some(t=>t.address.toLowerCase()===a)));
   discoveryIssues=result.issues;
   status=`${tokens.length} tokens with positive balances. ${result.complete?'Indexed discovery completed.':'Inventory may be incomplete.'} ${result.issues.length?'See discovery details below.':''}`;
-  statusError=false;render();
+  statusError=false;render();reconcileApprovals();
 }
 async function connect(){
   const choice=wallets.find(w=>w.uuid===el<HTMLSelectElement>('wallet-choice').value);
@@ -146,23 +146,33 @@ async function approve(address:string,reset=false){
   const hash=await w.writeContract(simulated.request);
   lastHash=hash;invalidate();
   status=`${t.symbol} approval submitted. You can approve the next token while it confirms.`;statusError=false;
-  // Return after submission: wallet prompts stay sequential, receipt waits run concurrently.
-  void pendingApprovals.track(key,hash,async transactionHash=>{
-    const result=await rpc.waitForTransactionReceipt({hash:transactionHash,confirmations:1,timeout:600000});
-    if(result.status!=='success')throw new Error('Approval transaction reverted.');
-    const allowance=await rpc.readContract({address:t.address,abi:erc20Abi,functionName:'allowance',args:[account,s]});
-    pendingApprovals.recordAllowance(key,allowance);
-    if(reset?allowance!==0n:allowance<amount)throw new Error('Approval confirmed but allowance is insufficient. Refresh balances and inspect the token.');
-    if(owner===account&&settings.contract.toLowerCase()===s.toLowerCase()){
-      const current=tokens.find(token=>token.address===t.address);if(current)current.allowance=allowance;
-      invalidate();status=`${t.symbol} approval confirmed.`;statusError=false;
-    }
-  }).catch(e=>{
-    if(owner===account&&settings.contract.toLowerCase()===s.toLowerCase()){
-      status=`${t.symbol}: ${errorText(e)} Check its transaction before retrying: ${hash}`;statusError=true;
-    }
-  }).finally(()=>render());
+  pendingApprovals.submit({chainId:1,account,spender:s,token:t.address},hash);
+  // Receipt waits are independent and never hold the wallet prompt lock.
+  void reconcileApproval(key,true);
+
 }
+async function reconcileApproval(key:string,wait=false){
+  const epoch=sessionEpoch,rpc=client();
+  await pendingApprovals.reconcile(key,{
+    receipt:hash=>wait?rpc.waitForTransactionReceipt({hash,confirmations:1,timeout:600000,onReplaced:replacement=>{
+      pendingApprovals.replace(key,replacement.transaction.hash,replacement.reason);render();
+    }}):rpc.getTransactionReceipt({hash}),
+    allowance:scope=>rpc.readContract({address:scope.token,abi:erc20Abi,functionName:'allowance',args:[scope.account,scope.spender]}),
+  });
+  if(epoch!==sessionEpoch)return;
+  const record=pendingApprovals.records.get(key);
+  if(record&&owner?.toLowerCase()===record.account.toLowerCase()&&settings.contract.toLowerCase()===record.spender.toLowerCase()){
+    const token=tokens.find(t=>t.address.toLowerCase()===record.token.toLowerCase()),value=pendingApprovals.allowance(key);
+    if(token&&record.allowanceFresh&&value!==undefined)token.allowance=value;
+    invalidate();render();
+  }
+}
+function currentApprovals(){
+  if(!owner||!isAddress(settings.contract))return [];
+  const prefix=approvalKey(owner,getAddress(settings.contract),'');
+  return [...pendingApprovals.records].filter(([key])=>key.startsWith(prefix));
+}
+function reconcileApprovals(){for(const [key] of currentApprovals())void reconcileApproval(key).catch(e=>notice(errorText(e),true));}
 async function simulate(){
   if(!owner)throw new Error('Connect your wallet.');await verifyContract();
   const id=scanId,account=owner,list=items(),recipient=validateBatch(settings.recipient,account,list),s=spender();
@@ -220,13 +230,14 @@ function render(){
   <div class="table-wrap"><table class="${list.length?'':'table-empty'}"><thead><tr><th scope="col"><span class="sr-only">Select</span></th><th scope="col">Token</th><th scope="col">Balance / amount</th><th scope="col">Approval</th></tr></thead><tbody>${list.map(t=>{
     const a=t.address.toLowerCase(),on=selected.has(a),value=selected.get(a)??'',ready=t.allowance!==null&&t.allowance>=(on&&selectedItems.find(i=>i.token===t)?.amount||t.balance);
     const pending=pendingApproval(a);
-    return `<tr class="${on?'selected':''}"><td><input type="checkbox" data-select="${a}" aria-label="Select ${escape(t.symbol)}" ${on?'checked':''} ${busy?'disabled':''}></td><td><strong>${escape(t.symbol)}</strong><span class="token-name">${escape(t.name)}</span><a class="address" href="https://etherscan.io/token/${t.address}" target="_blank" rel="noopener noreferrer">${escape(short(t.address))}</a>${t.warning?`<span class="warning">${escape(t.warning)}</span>`:''}</td><td class="amount-cell"><span class="balance" title="${escape(formatUnits(t.balance,t.decimals))}">${escape(formatUnits(t.balance,t.decimals))}</span>${on?`<div class="amount-input"><input inputmode="decimal" data-amount="${a}" aria-label="Amount of ${escape(t.symbol)}" value="${escape(value)}" ${busy?'disabled':''}><button data-max="${a}" ${busy?'disabled':''}>Max</button></div>`:''}</td><td><span class="approval ${ready?'ready':''}">${pending?'Confirming approval':!settings.contract?'Set contract':ready?'Ready':'Needs approval'}</span>${pending?`<a href="https://etherscan.io/tx/${pending}" target="_blank" rel="noopener noreferrer">View approval</a>`:on&&!ready&&settings.contract?`<button class="small" data-approve="${a}" ${busy?'disabled':''}>Approve</button>${t.allowance!==null&&t.allowance>0n?`<button class="small secondary" data-reset="${a}" ${busy?'disabled':''}>Reset to zero</button>`:''}`:''}</td></tr>`;
-  }).join('')||`<tr><td colspan="4" class="empty">${owner?tokens.length?'No matching tokens.':'Load balances or add a token address.':'Connect Rabby or MetaMask to discover your tokens.'}</td></tr>`}</tbody></table></div><p class="hint">No market-price filter. Dust and unpriced tokens remain selectable. A successful simulation does not establish a token's market value.</p></section>
+    return `<tr class="${on?'selected':''}"><td><input type="checkbox" data-select="${a}" aria-label="Select ${escape(t.symbol)}" ${on?'checked':''} ${busy?'disabled':''}></td><td><strong>${escape(t.symbol)}</strong><span class="token-name">${escape(t.name)}</span><a class="address" href="https://etherscan.io/token/${t.address}" target="_blank" rel="noopener noreferrer">${escape(short(t.address))}</a>${t.warning?`<span class="warning">${escape(t.warning)}</span>`:''}</td><td class="amount-cell"><span class="balance" title="${escape(formatUnits(t.balance,t.decimals))}">${escape(formatUnits(t.balance,t.decimals))}</span>${on?`<div class="amount-input"><input inputmode="decimal" data-amount="${a}" aria-label="Amount of ${escape(t.symbol)}" value="${escape(value)}" ${busy?'disabled':''}><button data-max="${a}" ${busy?'disabled':''}>Max</button></div>`:''}</td><td><span class="approval ${ready?'ready':''}">${pending?'Approval outcome pending/unknown':!settings.contract?'Set contract':ready?'Ready':'Needs approval'}</span>${pending?`<a href="https://etherscan.io/tx/${pending}" target="_blank" rel="noopener noreferrer">View approval</a>`:on&&!ready&&settings.contract?`<button class="small" data-approve="${a}" ${busy?'disabled':''}>Approve</button>${t.allowance!==null&&t.allowance>0n?`<button class="small secondary" data-reset="${a}" ${busy?'disabled':''}>Reset to zero</button>`:''}`:''}</td></tr>`;
+  }).join('')||`<tr><td colspan="4" class="empty">${owner?tokens.length?'No matching tokens.':'Load balances or add a token address.':'Connect Rabby or MetaMask to discover your tokens.'}</td></tr>`}</tbody></table></div><p class="hint">No market-price filter. Dust and unpriced tokens remain selectable. A successful simulation does not establish a token's market value.</p>
+  ${currentApprovals().length?`<section class="approval-recovery"><h2>Tracked approvals</h2><button id="check-approvals">Check receipts & allowances</button><p class="hint">Transaction outcome and current allowance are separate. Unknown outcomes block duplicate approvals. No transaction is resubmitted.</p><ul>${currentApprovals().map(([,r])=>`<li><span class="data">${escape(r.token)}</span> · ${escape(pendingApprovals.describe(r))} <a href="https://etherscan.io/tx/${r.hash}" target="_blank" rel="noopener noreferrer">${escape(r.hash)}</a>${r.previousHash?` · replaced hash <span class="data">${escape(r.previousHash)}</span>`:''}</li>`).join('')}</ul></section>`:''}</section>
   <aside class="review" aria-labelledby="review-title"><h2 id="review-title">Review batch</h2><label>Send everything to<input id="recipient" placeholder="0x… recipient address" value="${escape(settings.recipient)}" ${busy?'disabled':''}></label><label>Approval amount<select id="approval-mode" ${busy?'disabled':''}><option value="unlimited" ${settings.unlimited?'selected':''}>Unlimited · reusable</option><option value="exact" ${!settings.unlimited?'selected':''}>Exact selected amount</option></select></label><p class="hint">Unlimited approvals let this contract transfer selected tokens in future batches. You can revoke allowances separately.</p>
   <dl><div><dt>Selected tokens</dt><dd>${selected.size} / ${MAX_TOKENS}</dd></div><div><dt>Approvals needed</dt><dd>${inputError?'—':needs.length}</dd></div><div><dt>Service fee</dt><dd>0 ETH</dd></div><div><dt>Estimated gas</dt><dd>${gasEstimate?.toLocaleString()??'Simulate first'}</dd></div><div><dt>Gas at estimated max fee</dt><dd>${feeEstimate!==null?escape(formatEther(feeEstimate))+' ETH':'—'}</dd></div></dl>
   ${selectedItems.length?`<details class="selected-review" open><summary>Selected amounts</summary><ul>${selectedItems.map(i=>`<li><span>${escape(i.token.symbol)}</span><span>${escape(formatUnits(i.amount,i.token.decimals))}</span></li>`).join('')}</ul></details>`:''}
   ${inputError?`<p class="error">${escape(inputError)}</p>`:''}<p id="simulation-help" class="hint" aria-live="polite">${escape(simulationReason)}</p><button id="simulate" class="primary" aria-describedby="simulation-help" ${busy||!canSimulate?'disabled':''}>Simulate batch</button><button id="send" class="primary send" ${busy||!reviewed||!canSimulate?'disabled':''}>Review send in wallet</button><p class="hint">Approvals are separate transactions. The final send is one transaction; any failing token reverts the entire batch. Amounts are requested transfer amounts; tokens with transfer fees may deliver less. Final gas quote comes from your wallet.</p></aside></div>
-  <section class="status ${statusError?'error':''}" role="status" aria-live="polite">${busy?'<span class="busy-dot" aria-hidden="true"></span>':''}${escape(status)}${lastHash?`<a href="https://etherscan.io/tx/${lastHash}" target="_blank" rel="noopener noreferrer">View last transaction</a>`:''}</section>${discoveryIssues.length?`<details class="discovery-details"><summary>Discovery details (${discoveryIssues.length})</summary><ul>${discoveryIssues.map(i=>`<li>${escape(i)}</li>`).join('')}</ul></details>`:''}</main><footer><span>Ethereum mainnet · no service fee</span><span>Contract ${settings.contract?`<a href="https://etherscan.io/address/${escape(settings.contract)}#code" target="_blank" rel="noopener noreferrer">${escape(short(settings.contract))}</a>`:'not configured'}</span></footer>`;
+  ${pendingApprovals.storageWarning?`<p class="error">${escape(pendingApprovals.storageWarning)}</p>`:''}<section class="status ${statusError?'error':''}" role="status" aria-live="polite">${busy?'<span class="busy-dot" aria-hidden="true"></span>':''}${escape(status)}${lastHash?`<a href="https://etherscan.io/tx/${lastHash}" target="_blank" rel="noopener noreferrer">View last transaction</a>`:''}</section>${discoveryIssues.length?`<details class="discovery-details"><summary>Discovery details (${discoveryIssues.length})</summary><ul>${discoveryIssues.map(i=>`<li>${escape(i)}</li>`).join('')}</ul></details>`:''}</main><footer><span>Ethereum mainnet · no service fee</span><span>Contract ${settings.contract?`<a href="https://etherscan.io/address/${escape(settings.contract)}#code" target="_blank" rel="noopener noreferrer">${escape(short(settings.contract))}</a>`:'not configured'}</span></footer>`;
   bind();
 }
 function bind(){
@@ -234,6 +245,7 @@ function bind(){
   el<HTMLSelectElement>('wallet-choice').onchange=e=>{chosenWallet=(e.currentTarget as HTMLSelectElement).value;};
   document.getElementById('disconnect')?.addEventListener('click',()=>session.disconnect());
   el('connect').onclick=()=>void connect().catch(e=>notice(errorText(e),true));el('refresh').onclick=()=>void run(load);
+  document.getElementById('check-approvals')?.addEventListener('click',reconcileApprovals);
   el('inspect').onclick=()=>void run(inspect);
   el('save-settings').onclick=()=>void run(async()=>{
     settings={...settings,rpc:el<HTMLInputElement>('rpc').value.trim(),contract:el<HTMLInputElement>('contract').value.trim(),alchemyKey:el<HTMLInputElement>('alchemy').value.trim(),etherscanKey:el<HTMLInputElement>('etherscan').value.trim()};
@@ -259,3 +271,5 @@ window.addEventListener('eip6963:announceProvider',((event:CustomEvent<{info:{uu
   session.announce({...d.info,provider:d.provider});render();
 }) as EventListener);
 render();window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+setInterval(()=>{if(currentApprovals().some(([key])=>pendingApprovals.transactions.has(key)))reconcileApprovals();},15000);
