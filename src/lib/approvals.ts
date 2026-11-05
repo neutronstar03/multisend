@@ -28,7 +28,7 @@ export class PendingApprovals {
       if (!Array.isArray(saved)) return;
       for (const raw of saved) {
         if (!raw || typeof raw !== 'object' || raw.chainId !== 1 || !addressValid(raw.account) || !addressValid(raw.spender) || !addressValid(raw.token) || !hashValid(raw.hash)) continue;
-        const record: ApprovalRecord = {chainId:1,account:raw.account,spender:raw.spender,token:raw.token,hash:raw.hash,outcome:raw.outcome === 'cancelled' || raw.outcome === 'replaced' ? raw.outcome : 'unknown',allowanceFresh:false};
+        const record: ApprovalRecord = {chainId:1,account:raw.account,spender:raw.spender,token:raw.token,hash:raw.hash,outcome:['confirmed','reverted','cancelled','replaced'].includes(raw.outcome) ? raw.outcome : 'unknown',allowanceFresh:false};
         if (hashValid(raw.previousHash)) record.previousHash=raw.previousHash;
         const key=approvalKey(record);this.records.set(key,record);this.sync(key,record);
       }
@@ -43,7 +43,7 @@ export class PendingApprovals {
   private save() {
     try {
       // Store public transaction metadata only, never balances, amounts, credentials or signatures.
-      this.storage?.setItem(APPROVALS_KEY,JSON.stringify([...this.records.values()].map(r=>({chainId:r.chainId,account:r.account,spender:r.spender,token:r.token,hash:r.hash,previousHash:r.previousHash,...(r.outcome==='cancelled'||r.outcome==='replaced'?{outcome:r.outcome}:{})}))));
+      this.storage?.setItem(APPROVALS_KEY,JSON.stringify([...this.records.values()].map(r=>({chainId:r.chainId,account:r.account,spender:r.spender,token:r.token,hash:r.hash,previousHash:r.previousHash,outcome:r.outcome}))));
     } catch { this.storageWarning='Approval tracking could not be saved. Keep the submitted hash before reloading.'; }
   }
 

@@ -10,7 +10,7 @@ test('restores validated public metadata and blocks duplicate approval before re
  const store=storage(),p=new PendingApprovals(store),key=p.submit(scope,hash),restored=new PendingApprovals(store);
  expect(restored.transactions.get(key)).toBe(hash);expect(restored.records.get(key)?.outcome).toBe('unknown');
  expect(()=>restored.submit(scope,next)).toThrow('pending approval');
- expect(JSON.parse(store.getItem())[0]).toEqual({...scope,hash});
+ expect(JSON.parse(store.getItem())[0]).toEqual({...scope,hash,outcome:'pending'});
 });
 test('timeout, unavailable receipt and transport failure retain unresolved hashes across reload',async()=>{
  for(const receipt of [failed,async()=>null]){
@@ -66,4 +66,13 @@ test('malformed storage and unsupported chains are ignored; storage failures sta
  expect(new PendingApprovals(storage(JSON.stringify(bad))).records.size).toBe(0);
  expect(new PendingApprovals(storage('bad json')).storageWarning).toBeTruthy();
  const p=new PendingApprovals({getItem:()=>null,setItem:()=>{throw Error();}});p.submit(scope,hash);expect(p.storageWarning).toContain('could not be saved');
+});
+
+test('known confirmed/reverted outcomes survive reload when receipt RPC is unavailable',async()=>{
+ for(const status of ['success','reverted'] as const){
+  const store=storage(),p=new PendingApprovals(store),key=p.submit(scope,hash);await p.reconcile(key,{receipt:async()=>({status}),allowance:failed});
+  const restored=new PendingApprovals(store);await restored.reconcile(key,{receipt:failed,allowance:failed});
+  expect(restored.records.get(key)?.outcome).toBe(status==='success'?'confirmed':'reverted');
+  expect(restored.transactions.has(key)).toBe(status==='success');
+ }
 });
