@@ -23,7 +23,7 @@ The frontend uses an injected EIP-6963 wallet (Rabby or MetaMask). AirGap QR sig
 5. Approve each token once. After the wallet submits an approval, you can approve the next token while earlier transactions confirm. Each token follows its own transaction receipt; simulation waits for confirmations. Unlimited approval is the default requested for repeated use; exact approval is available. Tokens requiring zero-first approval have a separate reset action.
 6. Simulate the exact batch after approvals confirm, review the recipient and amounts, then sign the final send in the wallet.
 
-API keys, RPC URL, contract, manual addresses and recipient are stored only in this browser. They are sent to their respective API providers when used. Wallet connection and selected amounts are not persisted. The public build contains no personal address or API key.
+API keys, RPC URL, contract, manual addresses and recipient are stored only in this browser. They are sent to their respective API providers when used. The chosen wallet identity (EIP-6963 rdns) is remembered across browser sessions. On a return visit, the app reads already-authorized accounts and the chain without requesting permissions, then loads current balances. A locked or unavailable wallet requires a user-initiated Connect; another installed wallet is never silently substituted. Disconnect clears this preference and the inventory/batch state, so later visits stay disconnected. Account or network changes clear the previous inventory and selection; only Ethereum mainnet is supported. Accounts, balances, selected amounts and simulated batches are not persisted. The public build contains no personal address or API key.
 
 ## Contract
 

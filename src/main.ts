@@ -5,9 +5,9 @@ import artifact from './contract.json';
 import { discoverTokens, type Token } from './lib/discovery';
 import { approvalAmount, batchFingerprint, MAX_TOKENS, parseAmount, validateBatch, type SelectedToken } from './lib/batch';
 import { PendingApprovals } from './lib/approvals';
+import { WalletSession, type Wallet } from './lib/wallet-session';
 
 type Settings = { rpc:string; alchemyKey:string; etherscanKey:string; contract:string; recipient:string; unlimited:boolean; manual:string[] };
-type Wallet = { uuid:string; name:string; provider:EIP1193Provider };
 const defaults: Settings = { rpc:'https://ethereum-rpc.publicnode.com',alchemyKey:'',etherscanKey:'',contract:'0x6dd1CFbea062D4a6843BbbEA16912b76d585BA94',recipient:'',unlimited:true,manual:[] };
 function restore(): Settings {
   try {
@@ -21,10 +21,21 @@ let settings=restore();
 
 let savedSet:string[]=[];
 try{const value:unknown=JSON.parse(localStorage.getItem('multisend.tokenSet')??'[]');if(Array.isArray(value))savedSet=value.filter((a):a is string=>typeof a==='string'&&isAddress(a)).map(a=>a.toLowerCase());}catch{/* No saved token set. */}
-let settingsOpen=false;
-const wallets: Wallet[]=[];
+let sessionEpoch=0;
+let settingsOpen=false,chosenWallet='';
+const session=new WalletSession(localStorage,state=>{
+  sessionEpoch++;wallet=state.wallet;owner=state.account;tokens=[];selected.clear();scanId++;invalidate();
+  lastHash=null;discoveryIssues=[];contractVerified=false;
+  status=state.message;statusError=false;render();
+  if(state.phase==='connected'){
+    const id=scanId;
+    void load().catch(e=>{if(scanId===id+1)notice(errorText(e),true);});
+  }
+});
+const wallets=session.wallets;
 let wallet: Wallet|null=null, owner:Address|null=null, tokens:Token[]=[], busy=false, query='', status='Connect a wallet to load its Ethereum balances.', statusError=false;
 let selected=new Map<string,string>(), lastHash:Hex|null=null, scanId=0, reviewed:string|null=null, gasEstimate:bigint|null=null, feeEstimate:bigint|null=null, contractVerified=false;
+status=session.state.message;
 let discoveryIssues:string[]=[];
 const pendingApprovals=new PendingApprovals();
 const approvalKey=(account:Address,contract:Address,token:string)=>`${account.toLowerCase()}:${contract.toLowerCase()}:${token.toLowerCase()}`;
@@ -44,7 +55,7 @@ function checkArtifact(){if(!artifact.abi.length||artifact.bytecode==='0x'||arti
 function items():SelectedToken[]{return tokens.filter(t=>selected.has(t.address.toLowerCase())).map(token=>({token,amount:parseAmount(selected.get(token.address.toLowerCase())!,token.decimals,token.balance)}));}
 function itemsSafe():SelectedToken[]|null{try{return items();}catch{return null;}}
 function simulationBlockReason():string {
-  if(busy)return 'Wait for the current operation to finish.';
+  if(busy||['restoring','connecting'].includes(session.state.phase))return 'Wait for the current operation to finish.';
   if(!wallet||!owner)return 'Connect the sending wallet to simulate a batch.';
   if(!settings.contract)return 'Save the Multisend contract address first.';
   const pending=itemsSafe();
@@ -64,7 +75,7 @@ function updateSimulationControls(){
 function invalidate(){reviewed=null;gasEstimate=null;feeEstimate=null;}
 function notice(message:string,error=false){status=message;statusError=error;render();}
 function errorText(e:unknown){return e instanceof Error?e.message.slice(0,1800):String(e);}
-async function run(fn:()=>Promise<void>){if(busy)return;busy=true;try{const pending=fn();render();await pending;}catch(e){notice(errorText(e),true);}finally{busy=false;render();}}
+async function run(fn:()=>Promise<void>){if(busy)return;const epoch=sessionEpoch;busy=true;try{const pending=fn();render();await pending;}catch(e){if(sessionEpoch===epoch)notice(errorText(e),true);}finally{busy=false;render();}}
 async function checkWallet(expected:Address){
   if(!wallet||owner!==expected)throw new Error('Wallet account changed. Reconnect and refresh.');
   const [accounts,chain]=await Promise.all([wallet.provider.request({method:'eth_accounts'}),wallet.provider.request({method:'eth_chainId'})]);
@@ -73,12 +84,13 @@ async function checkWallet(expected:Address){
   return createWalletClient({account:expected,chain:mainnet,transport:custom(wallet.provider)});
 }
 async function verifyContract(){
+  const epoch=sessionEpoch;
   checkArtifact();
   contractVerified=false;
   const rpc=client();if(await rpc.getChainId()!==1)throw new Error('RPC is not Ethereum mainnet.');
   const code=await rpc.getCode({address:spender()});
   if(!code||code==='0x'||artifact.runtimeHash==='0x'||keccak256(code)!==artifact.runtimeHash)throw new Error('Contract bytecode does not match this tested build. Check the address and deployment version.');
-  contractVerified=true;
+  if(epoch===sessionEpoch)contractVerified=true;
 }
 async function load(){
   if(!owner)throw new Error('Connect a wallet first.');
@@ -87,6 +99,7 @@ async function load(){
   const rpc=client();if(await rpc.getChainId()!==1)throw new Error('RPC is not Ethereum mainnet.');
   let address:Address|null=null;
   if(settings.contract){await verifyContract();address=spender();}
+  if(id!==scanId||owner!==account)return;
   const allowanceRevision=pendingApprovals.revision;
   const result=await discoverTokens(rpc,account,{alchemyKey:settings.alchemyKey,etherscanKey:settings.etherscanKey,spender:address,manualAddresses:settings.manual.map(a=>getAddress(a))});
   if(id!==scanId||owner!==account)return;
@@ -103,14 +116,12 @@ async function load(){
 async function connect(){
   const choice=wallets.find(w=>w.uuid===el<HTMLSelectElement>('wallet-choice').value);
   if(!choice)throw new Error('No injected wallet found. Enable Rabby or MetaMask and reload.');
-  const accounts=await choice.provider.request({method:'eth_requestAccounts'});
-  if(!Array.isArray(accounts)||typeof accounts[0]!=='string'||!isAddress(accounts[0]))throw new Error('Wallet did not return a valid Ethereum account.');
-  wallet=choice;owner=getAddress(accounts[0]);tokens=[];selected.clear();scanId++;invalidate();await load();
+  await session.connect(choice);
 }
 async function inspect(){
   const address=el<HTMLInputElement>('inspect-address').value.trim();
   if(!isAddress(address)||getAddress(address)===zeroAddress)throw new Error('Enter a valid Ethereum address to inspect.');
-  wallet=null;owner=getAddress(address);tokens=[];selected.clear();scanId++;invalidate();await load();
+  session.disconnect();wallet=null;owner=getAddress(address);tokens=[];selected.clear();scanId++;invalidate();await load();
 }
 async function receipt(hash:Hex){
   lastHash=hash;status='Transaction submitted. Waiting for confirmation…';render();
@@ -154,12 +165,13 @@ async function approve(address:string,reset=false){
 }
 async function simulate(){
   if(!owner)throw new Error('Connect your wallet.');await verifyContract();
-  const account=owner,list=items(),recipient=validateBatch(settings.recipient,account,list),s=spender();
+  const id=scanId,account=owner,list=items(),recipient=validateBatch(settings.recipient,account,list),s=spender();
   if(recipient===s)throw new Error('Recipient cannot be the Multisend contract.');
   await checkWallet(account);const rpc=client();
   await rpc.simulateContract({address:s,abi:batchAbi,functionName:'batchTransfer',args:[recipient,list.map(i=>i.token.address),list.map(i=>i.amount)],account});
   const gas=await rpc.estimateContractGas({address:s,abi:batchAbi,functionName:'batchTransfer',args:[recipient,list.map(i=>i.token.address),list.map(i=>i.amount)],account});
   const fees=await rpc.estimateFeesPerGas();
+  if(id!==scanId||owner!==account)return;
   gasEstimate=gas;feeEstimate=gas*(fees.maxFeePerGas??fees.gasPrice??0n);reviewed=batchFingerprint(account,s,recipient,list);
   status='Batch simulation passed. Review the recipient, amounts and wallet gas quote before sending.';statusError=false;
 }
@@ -185,14 +197,15 @@ async function send(){
 }
 function el<T extends HTMLElement>(id:string):T{return document.getElementById(id) as T;}
 function render(){
-  const locked=busy||activeApprovalCount()>0;
+  const transitioning=['restoring','connecting'].includes(session.state.phase);
+  const locked=busy||transitioning||activeApprovalCount()>0;
   const list=tokens.filter(t=>`${t.symbol} ${t.name} ${t.address}`.toLowerCase().includes(query.toLowerCase()));
   let selectedItems:SelectedToken[]=[],inputError='';try{selectedItems=items();}catch(e){inputError=errorText(e);}
   const needs=selectedItems.filter(i=>i.token.allowance===null||i.token.allowance<i.amount);
   const simulationReason=simulationBlockReason(),canSimulate=!simulationReason;
   el('app').innerHTML=`
-  <header><a class="brand" href="/">Multisend<span>Ethereum</span></a><div class="wallet-tools"><select id="wallet-choice" aria-label="Wallet" ${locked?'disabled':''}>${wallets.map(w=>`<option value="${escape(w.uuid)}" ${w===wallet?'selected':''}>${escape(w.name)}</option>`).join('')||'<option>No wallet detected</option>'}</select><button id="connect" ${locked?'disabled':''}>${wallet&&owner?escape(short(owner)):'Connect wallet'}</button></div></header>
-  <main><div class="intro"><div><h1>Many tokens. One send.</h1><p>Select assets, approve once, then send a single atomic batch.</p></div><span class="fee">Service fee <strong>0 ETH</strong></span></div>
+  <header><a class="brand" href="/">Multisend<span>Ethereum</span></a><div class="wallet-tools"><select id="wallet-choice" aria-label="Wallet" ${locked?'disabled':''}>${wallets.map(w=>`<option value="${escape(w.uuid)}" ${w.uuid===(wallet?.uuid??chosenWallet)?'selected':''}>${escape(w.name)}</option>`).join('')||'<option>No wallet detected</option>'}</select><button id="connect" ${locked?'disabled':''}>${transitioning?session.state.phase==='restoring'?'Restoring…':'Connecting…':wallet&&owner?escape(short(owner)):'Connect wallet'}</button>${session.state.phase!=='disconnected'?'<button id="disconnect">Disconnect</button>':''}</div></header>
+  <main><p class="hint wallet-state" role="status">${escape(session.state.message)}</p><div class="intro"><div><h1>Many tokens. One send.</h1><p>Select assets, approve once, then send a single atomic batch.</p></div><span class="fee">Service fee <strong>0 ETH</strong></span></div>
   <details class="settings" ${settingsOpen?'open':''}><summary>Connection & contract settings ${contractVerified?'· bytecode matches':''}</summary><div class="settings-grid">
   <label>Ethereum RPC<input id="rpc" value="${escape(settings.rpc)}" type="url" ${locked?'disabled':''}></label>
   <label>Multisend contract<input id="contract" placeholder="0x… verified Ethereum deployment" value="${escape(settings.contract)}" ${locked?'disabled':''}></label>
@@ -218,7 +231,9 @@ function render(){
 }
 function bind(){
   document.querySelector<HTMLDetailsElement>('.settings')!.ontoggle=e=>{settingsOpen=(e.currentTarget as HTMLDetailsElement).open;};
-  el('connect').onclick=()=>void run(connect);el('refresh').onclick=()=>void run(load);
+  el<HTMLSelectElement>('wallet-choice').onchange=e=>{chosenWallet=(e.currentTarget as HTMLSelectElement).value;};
+  document.getElementById('disconnect')?.addEventListener('click',()=>session.disconnect());
+  el('connect').onclick=()=>void connect().catch(e=>notice(errorText(e),true));el('refresh').onclick=()=>void run(load);
   el('inspect').onclick=()=>void run(inspect);
   el('save-settings').onclick=()=>void run(async()=>{
     settings={...settings,rpc:el<HTMLInputElement>('rpc').value.trim(),contract:el<HTMLInputElement>('contract').value.trim(),alchemyKey:el<HTMLInputElement>('alchemy').value.trim(),etherscanKey:el<HTMLInputElement>('etherscan').value.trim()};
@@ -239,11 +254,8 @@ function bind(){
   document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(e=>e.onclick=()=>void run(()=>approve(e.dataset.reset!,true)));
   el('simulate').onclick=()=>void run(simulate);el('send').onclick=()=>void run(send);
 }
-window.addEventListener('eip6963:announceProvider',((event:CustomEvent<{info:{uuid:string;name:string};provider:EIP1193Provider}>)=>{
-  const d=event.detail;if(!d?.info||!d.provider||wallets.some(w=>w.uuid===d.info.uuid))return;
-  const entry={uuid:d.info.uuid,name:d.info.name,provider:d.provider};wallets.push(entry);
-  const p=d.provider as EIP1193Provider & {on?:(event:string,listener:()=>void)=>void};
-  const changed=()=>{if(wallet!==entry)return;scanId++;owner=null;tokens=[];selected.clear();invalidate();notice('Wallet account or network changed. Reconnect to refresh the inventory.');};
-  p.on?.('accountsChanged',changed);p.on?.('chainChanged',changed);if(!busy)render();
+window.addEventListener('eip6963:announceProvider',((event:CustomEvent<{info:{uuid:string;rdns:string;name:string};provider:EIP1193Provider}>)=>{
+  const d=event.detail;if(!d?.info||!d.provider)return;
+  session.announce({...d.info,provider:d.provider});render();
 }) as EventListener);
 render();window.dispatchEvent(new Event('eip6963:requestProvider'));
