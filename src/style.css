@@ -7,3 +7,5 @@ select{appearance:none;padding-right:34px;background-image:url("data:image/svg+x
 .approval-recovery{margin-top:24px;overflow-wrap:anywhere}.approval-recovery li{margin:12px 0}.approval-recovery button{margin-top:12px}
 
 .manual-tokens{margin:16px 0;overflow-wrap:anywhere}.manual-tokens li{margin:16px 0}.manual-tokens ul{padding-left:20px}
+
+.preset-tools{display:block;margin:16px 0;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.preset-tools label{max-width:600px}.preset-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.destination-review{overflow-wrap:anywhere}.destination-review .data{display:block;margin-top:8px}.destination-confirm{display:flex;align-items:flex-start;gap:10px}.destination-confirm input{flex-shrink:0;margin-top:3px}.destinations button{margin:8px 4px 0 0;white-space:normal}.destinations{margin-bottom:18px}
