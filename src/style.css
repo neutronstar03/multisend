@@ -5,3 +5,5 @@ select{appearance:none;padding-right:34px;background-image:url("data:image/svg+x
 @media(max-width:600px){table.table-empty{min-width:0}.table-empty th{white-space:normal;font-size:11px}.table-empty .empty{padding:40px 16px;max-width:100%;overflow-wrap:anywhere}}
 
 .approval-recovery{margin-top:24px;overflow-wrap:anywhere}.approval-recovery li{margin:12px 0}.approval-recovery button{margin-top:12px}
+
+.manual-tokens{margin:16px 0;overflow-wrap:anywhere}.manual-tokens li{margin:16px 0}.manual-tokens ul{padding-left:20px}

@@ -4,6 +4,7 @@ import { mainnet } from 'viem/chains';
 import artifact from './contract.json';
 import { discoverTokens, type Token } from './lib/discovery';
 import { approvalAmount, batchFingerprint, MAX_TOKENS, parseAmount, validateBatch, type SelectedToken } from './lib/batch';
+import { normalizeManual, verifyManualToken } from './lib/manual-tokens';
 import { PendingApprovals } from './lib/approvals';
 import { WalletSession, type Wallet } from './lib/wallet-session';
 
@@ -18,13 +19,15 @@ function restore(): Settings {
   } catch {return {...defaults};}
 }
 let settings=restore();
+settings.manual=normalizeManual(settings.manual);
+let manualFeedback='',inventoryReady=false;
 
 let savedSet:string[]=[];
 try{const value:unknown=JSON.parse(localStorage.getItem('multisend.tokenSet')??'[]');if(Array.isArray(value))savedSet=value.filter((a):a is string=>typeof a==='string'&&isAddress(a)).map(a=>a.toLowerCase());}catch{/* No saved token set. */}
 let sessionEpoch=0;
 let settingsOpen=false,chosenWallet='';
 const session=new WalletSession(localStorage,state=>{
-  sessionEpoch++;wallet=state.wallet;owner=state.account;tokens=[];selected.clear();scanId++;invalidate();
+  sessionEpoch++;manualFeedback='';inventoryReady=false;wallet=state.wallet;owner=state.account;tokens=[];selected.clear();scanId++;invalidate();
   lastHash=null;discoveryIssues=[];contractVerified=false;
   status=state.message;statusError=false;render();
   if(state.phase==='connected'){
@@ -95,7 +98,7 @@ async function verifyContract(){
 async function load(){
   if(!owner)throw new Error('Connect a wallet first.');
   const id=++scanId,account=owner;
-  invalidate();status='Reading token balances, including unpriced assets…';render();
+  inventoryReady=false;invalidate();status='Reading token balances, including unpriced assets…';render();
   const rpc=client();if(await rpc.getChainId()!==1)throw new Error('RPC is not Ethereum mainnet.');
   let address:Address|null=null;
   if(settings.contract){await verifyContract();address=spender();}
@@ -109,7 +112,7 @@ async function load(){
   }
   tokens=result.tokens.sort((a,b)=>a.symbol.localeCompare(b.symbol));
   selected=new Map([...selected].filter(([a])=>tokens.some(t=>t.address.toLowerCase()===a)));
-  discoveryIssues=result.issues;
+  discoveryIssues=result.issues;inventoryReady=true;
   status=`${tokens.length} tokens with positive balances. ${result.complete?'Indexed discovery completed.':'Inventory may be incomplete.'} ${result.issues.length?'See discovery details below.':''}`;
   statusError=false;render();reconcileApprovals();
 }
@@ -205,6 +208,37 @@ async function send(){
     statusError=differences.length>0;
   }catch(e){status=`Batch transaction confirmed, but balance refresh failed: ${errorText(e)}. Inspect the confirmed transaction before preparing another batch.`;statusError=true;}
 }
+async function addManual(){
+  if(!owner)throw new Error('Connect or inspect an address before checking its token balance.');
+  const value=el<HTMLInputElement>('manual').value.trim(),account=owner,epoch=sessionEpoch,rpc=client();
+  manualFeedback='Checking mainnet contract and ERC-20 reads…';render();
+  try{
+    if(await rpc.getChainId()!==1)throw new Error('RPC is not Ethereum mainnet. The address was not saved.');
+    const result=await verifyManualToken(value,{
+      code:address=>rpc.getCode({address}),
+      decimals:address=>rpc.readContract({address,abi:erc20Abi,functionName:'decimals'}),
+      symbol:address=>rpc.readContract({address,abi:erc20Abi,functionName:'symbol'}),
+      balance:address=>rpc.readContract({address,abi:erc20Abi,functionName:'balanceOf',args:[account]}),
+    });
+    if(epoch!==sessionEpoch)return;
+    const duplicate=settings.manual.some(a=>a.toLowerCase()===result.address.toLowerCase());
+    settings.manual=normalizeManual([...settings.manual,result.address]);save();
+    manualFeedback=`${result.address} ${duplicate?'is already saved':'saved for discovery'}. ${result.balance===0n?'It has no current positive balance in this account.':'Positive balance found; refreshing inventory.'} ${result.symbol?'Token label: '+result.symbol+'.':'Token label unavailable; use the contract address to identify it.'}`;
+    await load();
+  }catch(e){if(epoch===sessionEpoch)manualFeedback=errorText(e);throw e;}
+}
+async function removeManual(address:string){
+  settings.manual=settings.manual.filter(a=>a.toLowerCase()!==address.toLowerCase());save();selected.delete(address.toLowerCase());invalidate();
+  manualFeedback=`${address} removed from your manual discovery list. This does not remove wallet assets or hide a token independently found in the catalogue or an indexer.`;
+  if(owner)await load();else render();
+}
+function manualBalance(address:string){
+  if(!owner)return 'Saved for discovery. Connect or inspect an account to check its balance.';
+  if(!inventoryReady)return 'Saved for discovery. Current inventory has not finished refreshing.';
+  if(tokens.some(t=>t.address.toLowerCase()===address.toLowerCase()))return 'Saved for discovery; positive balance in the current inventory.';
+  if(discoveryIssues.some(issue=>issue.toLowerCase().includes(address.toLowerCase())))return 'Saved for discovery; token lookup incomplete. Check discovery details; no verified positive balance is available.';
+  return 'Saved for discovery; no current positive balance. No inventory row is shown for zero balances.';
+}
 function el<T extends HTMLElement>(id:string):T{return document.getElementById(id) as T;}
 function render(){
   const transitioning=['restoring','connecting'].includes(session.state.phase);
@@ -227,10 +261,11 @@ function render(){
   <div class="toolbar"><input id="search" type="search" aria-label="Search tokens" placeholder="Search token or address" value="${escape(query)}"><button id="select-visible" ${busy||!tokens.length?'disabled':''}>Select visible</button><button id="clear" ${busy||!selected.size?'disabled':''}>Clear</button></div>
   <div class="preset-tools"><button id="save-set" ${busy||!selected.size?'disabled':''}>Save token set</button><button id="load-set" ${busy||!tokens.length||!savedSet.length?'disabled':''}>Load saved set${savedSet.length?' ('+savedSet.length+')':''}</button><span class="hint">Reuse your reward-token selection. Amounts reload from current balances.</span></div>
   <div class="add-token"><input id="manual" aria-label="Token contract address" placeholder="Add any ERC-20 contract address" ${busy?'disabled':''}><button id="add" ${locked||!owner?'disabled':''}>Add token</button></div>
+  <details class="manual-tokens" ${manualFeedback?'open':''}><summary>Saved manual tokens (${settings.manual.length})</summary><p class="hint">These addresses extend discovery. Removing one does not remove wallet assets or exclude catalogue/indexer discoveries. Existing saved entries are checked during balance refresh; saving alone is not verification.</p>${manualFeedback?`<p role="status">${escape(manualFeedback)}</p>`:''}<ul>${settings.manual.map(address=>`<li><a class="data" href="https://etherscan.io/token/${address}" target="_blank" rel="noopener noreferrer">${escape(address)}</a><p class="hint">${escape(manualBalance(address))}</p><button data-remove-manual="${address}" ${busy?'disabled':''}>Remove manual address</button></li>`).join('')||'<li>No manual token addresses saved.</li>'}</ul></details>
   <div class="table-wrap"><table class="${list.length?'':'table-empty'}"><thead><tr><th scope="col"><span class="sr-only">Select</span></th><th scope="col">Token</th><th scope="col">Balance / amount</th><th scope="col">Approval</th></tr></thead><tbody>${list.map(t=>{
     const a=t.address.toLowerCase(),on=selected.has(a),value=selected.get(a)??'',ready=t.allowance!==null&&t.allowance>=(on&&selectedItems.find(i=>i.token===t)?.amount||t.balance);
     const pending=pendingApproval(a);
-    return `<tr class="${on?'selected':''}"><td><input type="checkbox" data-select="${a}" aria-label="Select ${escape(t.symbol)}" ${on?'checked':''} ${busy?'disabled':''}></td><td><strong>${escape(t.symbol)}</strong><span class="token-name">${escape(t.name)}</span><a class="address" href="https://etherscan.io/token/${t.address}" target="_blank" rel="noopener noreferrer">${escape(short(t.address))}</a>${t.warning?`<span class="warning">${escape(t.warning)}</span>`:''}</td><td class="amount-cell"><span class="balance" title="${escape(formatUnits(t.balance,t.decimals))}">${escape(formatUnits(t.balance,t.decimals))}</span>${on?`<div class="amount-input"><input inputmode="decimal" data-amount="${a}" aria-label="Amount of ${escape(t.symbol)}" value="${escape(value)}" ${busy?'disabled':''}><button data-max="${a}" ${busy?'disabled':''}>Max</button></div>`:''}</td><td><span class="approval ${ready?'ready':''}">${pending?'Approval outcome pending/unknown':!settings.contract?'Set contract':ready?'Ready':'Needs approval'}</span>${pending?`<a href="https://etherscan.io/tx/${pending}" target="_blank" rel="noopener noreferrer">View approval</a>`:on&&!ready&&settings.contract?`<button class="small" data-approve="${a}" ${busy?'disabled':''}>Approve</button>${t.allowance!==null&&t.allowance>0n?`<button class="small secondary" data-reset="${a}" ${busy?'disabled':''}>Reset to zero</button>`:''}`:''}</td></tr>`;
+    return `<tr class="${on?'selected':''}"><td><input type="checkbox" data-select="${a}" aria-label="Select ${escape(t.symbol)}" ${on?'checked':''} ${busy?'disabled':''}></td><td><strong>${escape(t.symbol)}</strong><span class="token-name">${escape(t.name)} · ${t.source==='known'?'Catalogue':t.source==='manual'?'Manual addition':'Indexer'}</span><a class="address" href="https://etherscan.io/token/${t.address}" target="_blank" rel="noopener noreferrer">${escape(short(t.address))}</a>${t.warning?`<span class="warning">${escape(t.warning)}</span>`:''}</td><td class="amount-cell"><span class="balance" title="${escape(formatUnits(t.balance,t.decimals))}">${escape(formatUnits(t.balance,t.decimals))}</span>${on?`<div class="amount-input"><input inputmode="decimal" data-amount="${a}" aria-label="Amount of ${escape(t.symbol)}" value="${escape(value)}" ${busy?'disabled':''}><button data-max="${a}" ${busy?'disabled':''}>Max</button></div>`:''}</td><td><span class="approval ${ready?'ready':''}">${pending?'Approval outcome pending/unknown':!settings.contract?'Set contract':ready?'Ready':'Needs approval'}</span>${pending?`<a href="https://etherscan.io/tx/${pending}" target="_blank" rel="noopener noreferrer">View approval</a>`:on&&!ready&&settings.contract?`<button class="small" data-approve="${a}" ${busy?'disabled':''}>Approve</button>${t.allowance!==null&&t.allowance>0n?`<button class="small secondary" data-reset="${a}" ${busy?'disabled':''}>Reset to zero</button>`:''}`:''}</td></tr>`;
   }).join('')||`<tr><td colspan="4" class="empty">${owner?tokens.length?'No matching tokens.':'Load balances or add a token address.':'Connect Rabby or MetaMask to discover your tokens.'}</td></tr>`}</tbody></table></div><p class="hint">No market-price filter. Dust and unpriced tokens remain selectable. A successful simulation does not establish a token's market value.</p>
   ${currentApprovals().length?`<section class="approval-recovery"><h2>Tracked approvals</h2><button id="check-approvals">Check receipts & allowances</button><p class="hint">Transaction outcome and current allowance are separate. Unknown outcomes block duplicate approvals. No transaction is resubmitted.</p><ul>${currentApprovals().map(([,r])=>`<li><span class="data">${escape(r.token)}</span> · ${escape(pendingApprovals.describe(r))} <a href="https://etherscan.io/tx/${r.hash}" target="_blank" rel="noopener noreferrer">${escape(r.hash)}</a>${r.previousHash?` · replaced hash <span class="data">${escape(r.previousHash)}</span>`:''}</li>`).join('')}</ul></section>`:''}</section>
   <aside class="review" aria-labelledby="review-title"><h2 id="review-title">Review batch</h2><label>Send everything to<input id="recipient" placeholder="0x… recipient address" value="${escape(settings.recipient)}" ${busy?'disabled':''}></label><label>Approval amount<select id="approval-mode" ${busy?'disabled':''}><option value="unlimited" ${settings.unlimited?'selected':''}>Unlimited · reusable</option><option value="exact" ${!settings.unlimited?'selected':''}>Exact selected amount</option></select></label><p class="hint">Unlimited approvals let this contract transfer selected tokens in future batches. You can revoke allowances separately.</p>
@@ -258,7 +293,8 @@ function bind(){
   el('clear').onclick=()=>{selected.clear();invalidate();render();};
   el('save-set').onclick=()=>{savedSet=[...selected.keys()];localStorage.setItem('multisend.tokenSet',JSON.stringify(savedSet));notice('Token set saved in this browser.');};
   el('load-set').onclick=()=>{selected.clear();for(const t of tokens)if(savedSet.includes(t.address.toLowerCase()))selected.set(t.address.toLowerCase(),formatUnits(t.balance,t.decimals));invalidate();notice(`Loaded ${selected.size} held tokens from the saved set. Review current balances before sending.`);};
-  el('add').onclick=()=>void run(async()=>{const a=el<HTMLInputElement>('manual').value.trim();if(!isAddress(a)||getAddress(a)===zeroAddress)throw new Error('Enter a valid ERC-20 contract address.');settings.manual=[...new Set([...settings.manual,getAddress(a)])];save();await load();});
+  el('add').onclick=()=>void run(addManual);
+  document.querySelectorAll<HTMLButtonElement>('[data-remove-manual]').forEach(e=>e.onclick=()=>void run(()=>removeManual(e.dataset.removeManual!)));
   document.querySelectorAll<HTMLInputElement>('[data-select]').forEach(e=>e.onchange=()=>{const a=e.dataset.select!,t=tokens.find(t=>t.address.toLowerCase()===a)!;if(e.checked)selected.set(a,formatUnits(t.balance,t.decimals));else selected.delete(a);invalidate();render();});
   document.querySelectorAll<HTMLInputElement>('[data-amount]').forEach(e=>{e.oninput=()=>{selected.set(e.dataset.amount!,e.value);invalidate();updateSimulationControls();};});
   document.querySelectorAll<HTMLButtonElement>('[data-max]').forEach(e=>e.onclick=()=>{const a=e.dataset.max!,t=tokens.find(t=>t.address.toLowerCase()===a)!;selected.set(a,formatUnits(t.balance,t.decimals));invalidate();render();});
